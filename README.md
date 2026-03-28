@@ -1,6 +1,6 @@
 # pondFilaESP
 
-Firmware ESP32 (ESP-IDF, sem Arduino) que envia dados simulados de sensores via HTTP para o backend [pondRabbitMQServices](../pondRabbitMQServices).
+Firmware ESP32 (ESP-IDF, sem Arduino) que envia dados simulados de sensores via HTTP para o backend [pondRabbitMQServices](https://github.com/cucapcosta/pondRabbitMQServices).
 
 ## Como funciona
 
