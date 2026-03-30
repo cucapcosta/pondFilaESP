@@ -1,74 +1,69 @@
 # pondFilaESP
 
-Firmware ESP32 (ESP-IDF, sem Arduino) que envia dados simulados de sensores via HTTP para o backend [pondRabbitMQServices](https://github.com/cucapcosta/pondRabbitMQServices).
+Firmware ESP32 (Arduino) que lê sensores reais — **HC-SR04** (presença por ultrassom) e **NTC** (temperatura) — e envia telemetria via HTTP POST para o backend [pondRabbitMQServices](https://github.com/cucapcosta/pondRabbitMQServices).
 
-## Como funciona
+## Circuito
 
-O ESP32 conecta no WiFi, gera leituras mockadas de temperatura e umidade, e envia via HTTP POST a cada 5 segundos para o backend. O backend enfileira no RabbitMQ e o consumer persiste no PostgreSQL.
+![Circuito no Wokwi](images/circuit.png)
 
-```
-ESP32                          Backend (:3420)           RabbitMQ          PostgreSQL
-  |                                |                       |                  |
-  |-- POST /add {temp: 27.3} ---->|                       |                  |
-  |                                |-- publish "hello" -->|                  |
-  |                                |                       |-- consume ----->|
-  |<---- 200 OK ------------------|                       |   INSERT INTO   |
-  |                                |                       |   sensor_data   |
-  |-- POST /add {hum: 55.1} ----->|                       |                  |
-  |        ...                     |                       |                  |
-```
+| Componente | Pino ESP32 | Função |
+|---|---|---|
+| HC-SR04 TRIG | GPIO5 | Disparo do pulso ultrassônico |
+| HC-SR04 ECHO | GPIO18 | Retorno do pulso (ISR CHANGE) |
+| NTC OUT | GPIO34 | Leitura analógica (ADC 12-bit) |
 
-## Payload enviado
+## Funcionamento
+
+![Temperatura no Serial](images/temp.png)
+
+O firmware roda em **loop não-bloqueante**:
+
+1. **HC-SR04** — trigger a cada 250ms; ISR (`attachInterrupt`) captura `micros()` no rising/falling do ECHO para medir distância. Debounce de 3 leituras consecutivas iguais antes de confirmar mudança de presença.
+2. **NTC** — timer de hardware (`hw_timer_t`, 5s) seta uma flag; o loop lê o ADC 12-bit, aplica fórmula Beta (Steinhart-Hart simplificada) e média móvel de 5 amostras.
+3. **Fila circular** — ring buffer de 10 slots desacopla leitura de envio. Sensores fazem `push`, o loop faz `pop` e envia.
+4. **WiFi** — máquina de estados (`DISCONNECTED → CONNECTING → CONNECTED`) com reconexão automática e backoff crescente (até 10 retries).
+5. **HTTP POST** — JSON montado com ArduinoJson, timestamp real via NTP (`configTime`), retry 3x em caso de falha.
+
+## Payload
 
 ```json
 {
   "SensorID": "ESP32-001",
-  "Timestamp": "2026-01-01T00:00:00Z",
+  "Timestamp": "2026-03-30T12:00:00Z",
   "Type": "temperature",
   "Unit": "C",
   "IsDiscrete": false,
-  "Value": 27.3
+  "Value": 24.3
 }
 ```
 
-## Configuracao
+## Configuração
 
-Edite os `#define` no topo de `main/main.c`:
+Edite os `#define` no topo de `sketch.ino`:
 
 ```c
-#define WIFI_SSID        "MyNetwork"
-#define WIFI_PASSWORD    "MyPassword"
-#define SERVER_URL       "http://192.168.1.100:3420/add"
-#define SENSOR_ID        "ESP32-001"
-#define SEND_INTERVAL_MS 5000
+#define WIFI_SSID   "Wokwi-GUEST"
+#define WIFI_PASS   ""
+#define SERVER_URL  "http://192.168.1.100:3420/add"
+#define SENSOR_ID   "ESP32-001"
 ```
 
-## Build e Flash
+Para usar com ngrok/tunnel, troque `SERVER_URL` pela URL do tunnel.
 
-Requer [ESP-IDF](https://docs.espressif.com/projects/esp-idf/en/latest/esp32/get-started/) instalado.
+## Rodar no Wokwi
 
-```bash
-source /opt/esp-idf/export.sh
-idf.py build
-idf.py -p /dev/ttyUSB0 flash monitor
-```
+1. Abra o projeto no [Wokwi](https://wokwi.com/) como Arduino ESP32
+2. O `diagram.json` já tem o circuito configurado (ESP32 + NTC + HC-SR04)
+3. Use os sliders dos sensores para testar:
+   - HC-SR04 < 30 cm → log de presença + POST
+   - NTC slider → temperatura a cada 5s + POST
+4. Desconectar WiFi → reconexão automática visível no Serial
 
 ## Estrutura
 
 ```
-main/main.c  — Tudo em um arquivo: WiFi, mock de sensores, HTTP POST, loop principal
-```
-
-O codigo inclui comentarios mostrando como substituir o mock por leitura real de pino (ADC no GPIO34).
-
-## Testar sem ESP32
-
-Suba o backend e envie manualmente:
-
-```bash
-cd ../pondRabbitMQServices && docker-compose up -d
-
-curl -X POST http://localhost:3420/add \
-  -H "Content-Type: application/json" \
-  -d '{"SensorID":"ESP32-001","Timestamp":"2026-01-01T00:00:00Z","Type":"temperature","Unit":"C","IsDiscrete":false,"Value":27.3}'
+sketch.ino      — Firmware completo (Arduino)
+diagram.json    — Circuito Wokwi (ESP32 + NTC + HC-SR04)
+wokwi.toml      — Configuração Wokwi
+images/         — Screenshots do circuito e serial
 ```
